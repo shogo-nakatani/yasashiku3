@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>やさしく読める（音声文字化・漢字やさしく変換）</title>
+<style>
+  :root{ --blue:#2563eb; --blue-d:#1d4ed8; --bg:#f4f7fb; --line:#d5dde8; --ink:#1f2937; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:"Hiragino Kaku Gothic ProN","Yu Gothic UI","Meiryo",system-ui,sans-serif;
+        background:var(--bg); color:var(--ink); line-height:1.9; }
+  header{ background:var(--blue); color:#fff; padding:14px 18px; }
+  header h1{ font-size:20px; margin:0; }
+  header p{ margin:4px 0 0; font-size:13px; opacity:.9; }
+  .wrap{ max-width:900px; margin:0 auto; padding:16px; }
+  .bar{ display:flex; flex-wrap:wrap; gap:14px; align-items:center; background:#fff;
+        border:1px solid var(--line); border-radius:12px; padding:12px 16px; margin-bottom:16px; }
+  .bar label{ font-size:14px; font-weight:700; margin-right:6px; }
+  select,button{ font-size:15px; font-family:inherit; }
+  select{ padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  .seg{ display:inline-flex; border:1px solid var(--blue); border-radius:8px; overflow:hidden; }
+  .seg button{ border:0; background:#fff; color:var(--blue); padding:7px 14px; cursor:pointer; }
+  .seg button.on{ background:var(--blue); color:#fff; }
+  .tabs{ display:flex; gap:8px; margin-bottom:14px; }
+  .tabs button{ flex:1; padding:12px; border:1px solid var(--line); background:#fff; border-radius:12px 12px 0 0;
+                cursor:pointer; font-size:16px; font-weight:700; color:#64748b; }
+  .tabs button.on{ background:#fff; color:var(--blue); border-bottom:3px solid var(--blue); }
+  .panel{ display:none; background:#fff; border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .panel.on{ display:block; }
+  textarea{ width:100%; min-height:130px; font-size:17px; font-family:inherit; padding:12px;
+            border:1px solid var(--line); border-radius:10px; resize:vertical; line-height:1.8; }
+  .btn{ background:var(--blue); color:#fff; border:0; border-radius:10px; padding:12px 22px;
+        font-size:16px; font-weight:700; cursor:pointer; }
+  .btn:hover{ background:var(--blue-d); }
+  .btn.gray{ background:#e2e8f0; color:#334155; }
+  .btn.rec{ background:#dc2626; }
+  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:14px 0; }
+  .out{ margin-top:16px; padding:18px 20px; background:#fbfdff; border:1px dashed var(--blue);
+        border-radius:12px; font-size:26px; line-height:2.4; min-height:70px; }
+  .out:empty::before{ content:"ここに よみやすい ぶんが でます"; color:#9aa7b8; font-size:18px; }
+  ruby rt{ font-size:.5em; color:var(--blue-d); font-weight:700; }
+  .status{ font-size:14px; color:#64748b; margin-left:8px; }
+  .live{ color:#94a3b8; }
+  .hint{ font-size:13px; color:#64748b; margin-top:10px; }
+  .big{ font-size:26px !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>やさしく読める</h1>
+  <p>自分の声で書いたり、教科書やワークの文を「習った漢字だけ」にして読みやすくします。</p>
+</header>
+
+<div class="wrap">
+  <div class="bar">
+    <span><label>漢字を残す学年</label>
+      <select id="grade">
+        <option value="1">小1まで</option>
+        <option value="2" selected>小1・小2まで</option>
+        <option value="3">小1〜小3まで</option>
+      </select>
+    </span>
+    <span><label>表示</label>
+      <span class="seg" id="modeSeg">
+        <button data-mode="hira" class="on">ひらがなにする</button>
+        <button data-mode="ruby">ふりがな（ルビ）</button>
+      </span>
+    </span>
+    <span class="status" id="loadStatus">辞書を よみこみ中…</span>
+  </div>
+
+  <div class="tabs">
+    <button id="tabVoice" class="on">🎤 自分の声で書く</button>
+    <button id="tabPhoto">📷 写真を文字にする</button>
+    <button id="tabText">📝 文をやさしくする</button>
+  </div>
+
+  <!-- 音声パネル -->
+  <div class="panel on" id="panelVoice">
+    <div class="row">
+      <button class="btn rec" id="micBtn" disabled>🎤 話す（スタート）</button>
+      <button class="btn gray" id="clearVoice">けす</button>
+      <button class="btn gray" id="copyVoice">コピー</button>
+      <span class="status" id="micStatus"></span>
+    </div>
+    <div class="hint">ボタンをおして自分で話すと、話したことばが文字になります。タイピングのかわりに、声でノートや答えを書けます。Chromeでインターネットにつながっているとうまくうごきます。</div>
+    <div class="out big" id="voiceOut"></div>
+  </div>
+
+  <!-- 写真パネル -->
+  <div class="panel" id="panelPhoto">
+    <div class="row">
+      <label class="btn" for="photoInput">📷 写真をとる／えらぶ</label>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+      <button class="btn" id="ocrBtn" disabled>文字を よみとる</button>
+      <span class="status" id="ocrStatus"></span>
+    </div>
+    <div class="hint">ワークや教科書を、明るいところで まっすぐ・大きく うつすと よく読み取れます。読み取った文字は下で直せます。</div>
+    <img id="preview" style="display:none; max-width:100%; border:1px solid var(--line); border-radius:10px; margin:10px 0;">
+    <div id="ocrEditWrap" style="display:none;">
+      <div class="hint" style="margin-top:12px;"><b>よみとった文字（まちがいがあれば直してください）</b></div>
+      <textarea id="ocrText" placeholder="ここに よみとった文字が でます。"></textarea>
+      <div class="row">
+        <button class="btn" id="ocrConvBtn">ルビをふる／やさしくする</button>
+        <button class="btn gray" id="clearPhoto">けす</button>
+      </div>
+    </div>
+    <div class="out" id="photoOut"></div>
+  </div>
+
+  <!-- テキストパネル -->
+  <div class="panel" id="panelText">
+    <textarea id="src" placeholder="ここに教科書やワークの文をはりつけてください。"></textarea>
+    <div class="row">
+      <button class="btn" id="convBtn" disabled>やさしくする</button>
+      <button class="btn gray" id="clearText">けす</button>
+      <button class="btn gray" id="copyBtn">コピー</button>
+    </div>
+    <div class="out" id="textOut"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+/* ===== 学年別 教育漢字 ===== */
+const G1="一右雨円王音下火花貝学気九休玉金空月犬見五口校左三山子四糸字耳七車手十出女小上森人水正生青夕石赤千川先早草足村大男竹中虫町天田土二日入年白八百文木本名目立力林六";
+const G2="引羽雲園遠何科夏家歌画回会海絵外角楽活間丸岩顔汽記帰弓牛魚京強教近兄形計元言原戸古午後語工公広交光考行高黄合谷国黒今才細作算止市矢姉思紙寺自時室社弱首秋週春書少場色食心新親図数西声星晴切雪船線前組走多太体台地池知茶昼長鳥朝直通弟店点電刀冬当東答頭同道読内南肉馬売買麦半番父風分聞米歩母方北毎妹万明鳴毛門夜野友用曜来里理話";
+const G3="悪安暗医委意育員院飲運泳駅央横屋温化荷界開階寒感漢館岸起期客究急級宮球去橋業曲局銀区苦具君係軽血決研県庫湖向幸港号根祭皿仕死使始指歯詩次事持式実写者主守取酒受州拾終習集住重宿所暑助昭消商章勝乗植申身神真深進世整昔全相送想息速族他打対待代第題炭短談着注柱丁帳調追定庭笛鉄転都度投豆島湯登等動童農波配倍箱畑発反坂板皮悲美鼻筆氷表秒病品負部服福物平返勉放味命面問役薬由油有遊予羊洋葉陽様落流旅両緑礼列練路和";
+
+const isKanji = c => /[㐀-鿿]/.test(c);
+const kata2hira = s => s.replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+
+let keepSet = new Set();
+function buildKeep(){
+  const g = document.getElementById("grade").value;
+  let s = G1;
+  if(g>=2) s += G2;
+  if(g>=3) s += G3;
+  keepSet = new Set([...s]);
+}
+buildKeep();
+
+let mode = "hira";
+let worker = null, workerReady = false, reqSeq = 0;
+const pending = {};
+
+/* ===== 変換（重い辞書処理はバックグラウンドWorkerで実行し、画面を固めない） ===== */
+function escapeHtml(s){ return s.replace(/[&<>]/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[m])); }
+
+function tokensToHtml(tokens){
+  let out = "";
+  for(const t of tokens){
+    const s = t.s;
+    const kanji = [...s].filter(isKanji);
+    if(kanji.length === 0 || kanji.every(k => keepSet.has(k))){
+      out += escapeHtml(s);
+      continue;
+    }
+    const reading = (t.r && t.r !== "*") ? kata2hira(t.r) : s;
+    if(mode === "hira"){
+      out += escapeHtml(reading);
+    } else {
+      out += "<ruby>" + escapeHtml(s) + "<rt>" + escapeHtml(reading) + "</rt></ruby>";
+    }
+  }
+  return out.replace(/\n/g, "<br>");
+}
+
+function tokenize(text){
+  return new Promise(resolve => {
+    if(!workerReady || !worker){ resolve(null); return; }
+    const id = ++reqSeq;
+    pending[id] = resolve;
+    worker.postMessage({ type: "tokenize", id: id, text: text });
+  });
+}
+
+async function convertAsync(text){
+  const tokens = await tokenize(text);
+  if(!tokens) return escapeHtml(text).replace(/\n/g, "<br>");
+  return tokensToHtml(tokens);
+}
+
+/* ===== 辞書ロード（Workerで裏側実行。失敗しても画面は固まらない） ===== */
+function showLoadError(msg){
+  const st = document.getElementById("loadStatus");
+  st.textContent = msg || "辞書を読み込めませんでした。ネット接続と、cdn.jsdelivr.net の許可をご確認ください。";
+  st.style.color = "#dc2626";
+}
+
+function initWorker(){
+  const st = document.getElementById("loadStatus");
+  st.textContent = "辞書を よみこみ中…（初回は少し時間がかかります）";
+  const workerSrc = [
+    "importScripts('https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js');",
+    "var tk = null;",
+    "try {",
+    "  kuromoji.builder({ dicPath: 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/' })",
+    "    .build(function(err, t){",
+    "      if(err){ postMessage({ type: 'error' }); return; }",
+    "      tk = t; postMessage({ type: 'ready' });",
+    "    });",
+    "} catch(e){ postMessage({ type: 'error' }); }",
+    "onmessage = function(e){",
+    "  var d = e.data;",
+    "  if(d.type === 'tokenize'){",
+    "    if(!tk){ postMessage({ type: 'tokens', id: d.id, tokens: null }); return; }",
+    "    var toks = tk.tokenize(d.text).map(function(x){ return { s: x.surface_form, r: x.reading }; });",
+    "    postMessage({ type: 'tokens', id: d.id, tokens: toks });",
+    "  }",
+    "};"
+  ].join("\n");
+  try{
+    const blob = new Blob([workerSrc], { type: "application/javascript" });
+    worker = new Worker(URL.createObjectURL(blob));
+  }catch(e){
+    showLoadError("バックグラウンド処理を開始できませんでした。");
+    return;
+  }
+  worker.onmessage = function(e){
+    const d = e.data;
+    if(d.type === "ready"){
+      workerReady = true;
+      st.textContent = "準備できました ✓"; st.style.color = "#16a34a";
+      document.getElementById("convBtn").disabled = false;
+      document.getElementById("micBtn").disabled = false;
+      reconvertVoice();
+    } else if(d.type === "error"){
+      showLoadError("辞書プログラムを読み込めませんでした（cdn.jsdelivr.net がブロックされている可能性）。学校のネットワークで許可してください。");
+    } else if(d.type === "tokens"){
+      const cb = pending[d.id];
+      if(cb){ delete pending[d.id]; cb(d.tokens); }
+    }
+  };
+  worker.onerror = function(){
+    showLoadError("辞書プログラムを読み込めませんでした（cdn.jsdelivr.net がブロックされている可能性）。学校のネットワークで許可してください。");
+  };
+}
+
+/* ===== UI ===== */
+const modeSeg = document.getElementById("modeSeg");
+modeSeg.addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  [...modeSeg.children].forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  mode = b.dataset.mode;
+  reconvertAll();
+});
+document.getElementById("grade").addEventListener("change", () => { buildKeep(); reconvertAll(); });
+
+function tab(which){
+  const map = { voice:"Voice", photo:"Photo", text:"Text" };
+  for(const k in map){
+    const on = (k === which);
+    document.getElementById("tab" + map[k]).classList.toggle("on", on);
+    document.getElementById("panel" + map[k]).classList.toggle("on", on);
+  }
+}
+document.getElementById("tabVoice").onclick = () => tab("voice");
+document.getElementById("tabPhoto").onclick = () => tab("photo");
+document.getElementById("tabText").onclick = () => tab("text");
+
+/* テキスト変換 */
+const src = document.getElementById("src");
+const textOut = document.getElementById("textOut");
+document.getElementById("convBtn").onclick = async () => { textOut.innerHTML = await convertAsync(src.value); };
+document.getElementById("clearText").onclick = () => { src.value=""; textOut.innerHTML=""; };
+document.getElementById("copyBtn").onclick = () => {
+  const t = textOut.innerText || "";
+  navigator.clipboard && navigator.clipboard.writeText(t);
+};
+
+/* 写真（OCR） */
+const photoInput = document.getElementById("photoInput");
+const preview = document.getElementById("preview");
+const ocrBtn = document.getElementById("ocrBtn");
+const ocrStatus = document.getElementById("ocrStatus");
+const ocrEditWrap = document.getElementById("ocrEditWrap");
+const ocrText = document.getElementById("ocrText");
+const photoOut = document.getElementById("photoOut");
+let photoFile = null;
+
+photoInput.addEventListener("change", e => {
+  const f = e.target.files[0];
+  if(!f) return;
+  photoFile = f;
+  preview.src = URL.createObjectURL(f);
+  preview.style.display = "block";
+  ocrBtn.disabled = false;
+  ocrStatus.textContent = "「文字を よみとる」を おしてください";
+});
+
+ocrBtn.addEventListener("click", async () => {
+  if(!photoFile) return;
+  ocrBtn.disabled = true;
+  ocrStatus.textContent = "よみとり中… 0%";
+  try{
+    const { data } = await Tesseract.recognize(photoFile, "jpn", {
+      logger: m => {
+        if(m.status === "recognizing text"){
+          ocrStatus.textContent = "よみとり中… " + Math.round(m.progress * 100) + "%";
+        } else if(m.status){
+          ocrStatus.textContent = "じゅんび中…（" + m.status + "）";
+        }
+      }
+    });
+    const text = (data.text || "").replace(/[ \t]+/g, "").trim();
+    ocrText.value = text;
+    ocrEditWrap.style.display = "block";
+    photoOut.innerHTML = await convertAsync(text);
+    ocrStatus.textContent = "よみとり かんりょう ✓";
+  }catch(err){
+    ocrStatus.textContent = "よみとりに しっぱいしました";
+  }
+  ocrBtn.disabled = false;
+});
+
+document.getElementById("ocrConvBtn").addEventListener("click", async () => {
+  photoOut.innerHTML = await convertAsync(ocrText.value);
+});
+document.getElementById("clearPhoto").addEventListener("click", () => {
+  photoFile = null; photoInput.value = ""; ocrText.value = "";
+  preview.style.display = "none"; ocrEditWrap.style.display = "none";
+  photoOut.innerHTML = ""; ocrStatus.textContent = ""; ocrBtn.disabled = true;
+});
+
+/* 音声 */
+let recognizedText = "";
+const voiceOut = document.getElementById("voiceOut");
+async function reconvertVoice(){ voiceOut.innerHTML = await convertAsync(recognizedText); }
+async function reconvertAll(){ reconvertVoice(); if(src.value) textOut.innerHTML = await convertAsync(src.value); }
+
+const micBtn = document.getElementById("micBtn");
+const micStatus = document.getElementById("micStatus");
+document.getElementById("clearVoice").onclick = () => { recognizedText=""; voiceOut.innerHTML=""; };
+document.getElementById("copyVoice").onclick = () => {
+  navigator.clipboard && navigator.clipboard.writeText(voiceOut.innerText || "");
+};
+
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, listening = false;
+if(!SR){
+  micBtn.disabled = true;
+  micStatus.textContent = "このブラウザは音声認識に対応していません（Chrome推奨）";
+} else {
+  recog = new SR();
+  recog.lang = "ja-JP";
+  recog.continuous = true;
+  recog.interimResults = true;
+  recog.onresult = async e => {
+    let interim = "";
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const r = e.results[i];
+      if(r.isFinal){ recognizedText += r[0].transcript; }
+      else { interim += r[0].transcript; }
+    }
+    const converted = await convertAsync(recognizedText);
+    voiceOut.innerHTML = converted +
+      (interim ? '<span class="live">' + escapeHtml(interim) + '</span>' : "");
+  };
+  recog.onerror = ev => { micStatus.textContent = "エラー: " + ev.error; };
+  recog.onend = () => { if(listening){ try{ recog.start(); }catch(e){} } };
+  micBtn.onclick = () => {
+    if(listening){
+      listening = false; recog.stop();
+      micBtn.textContent = "🎤 話す（スタート）"; micBtn.classList.add("rec"); micStatus.textContent = "";
+    } else {
+      listening = true; try{ recog.start(); }catch(e){}
+      micBtn.textContent = "■ とめる"; micBtn.classList.remove("rec"); micStatus.textContent = "聞いています…";
+    }
+  };
+}
+
+/* ボタンの設定がすべて終わってから辞書をバックグラウンドで読み込む */
+initWorker();
+</script>
+</body>
+</html>
