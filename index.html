@@ -338,6 +338,33 @@ async function runOcr(canvas, lang, logger){
   }
 }
 
+/* ===== 高精度OCR（無料・GoogleドライブOCR）===== */
+/* ↓↓↓ Apps Scriptプロキシの「ウェブアプリURL」をここに貼ると、高精度OCRに切り替わります。
+   空のままなら、これまでどおり内蔵OCR（Tesseract）で動きます。 */
+const PROXY_URL = "";
+
+function isProxyReady(){ return PROXY_URL && PROXY_URL.indexOf("http") === 0; }
+
+function fileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function cloudOcr(file){
+  const b64 = await fileToBase64(file);
+  const res = await fetch(PROXY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ image: b64, mimeType: file.type })
+  });
+  const json = await res.json();
+  return json.text || "";
+}
+
 photoInput.addEventListener("change", e => {
   const f = e.target.files[0];
   if(!f) return;
@@ -360,9 +387,22 @@ ocrBtn.addEventListener("click", async () => {
     }
   };
   try{
-    const canvas = await preprocess(photoFile);
-    const lang = ocrDir === "v" ? "jpn_vert" : "jpn";
-    let text = await runOcr(canvas, lang, logger);
+    let text = "";
+    if(isProxyReady()){
+      // 高精度OCR（GoogleドライブOCR）。失敗したら内蔵OCRに切り替える
+      try{
+        ocrStatus.textContent = "クラウドで よみとり中…";
+        text = await cloudOcr(photoFile);
+      }catch(e){
+        ocrStatus.textContent = "クラウドOCR失敗。内蔵OCRで再試行中…";
+        const canvas = await preprocess(photoFile);
+        text = await runOcr(canvas, ocrDir === "v" ? "jpn_vert" : "jpn", logger);
+      }
+    } else {
+      // 内蔵OCR（Tesseract）
+      const canvas = await preprocess(photoFile);
+      text = await runOcr(canvas, ocrDir === "v" ? "jpn_vert" : "jpn", logger);
+    }
     text = text.replace(/[ \t　]+/g, "").replace(/\n{2,}/g, "\n").trim();
     ocrText.value = text;
     ocrEditWrap.style.display = "block";
