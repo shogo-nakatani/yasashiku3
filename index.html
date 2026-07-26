@@ -341,7 +341,7 @@ async function runOcr(canvas, lang, logger){
 /* ===== 高精度OCR（無料・GoogleドライブOCR）===== */
 /* ↓↓↓ Apps Scriptプロキシの「ウェブアプリURL」をここに貼ると、高精度OCRに切り替わります。
    空のままなら、これまでどおり内蔵OCR（Tesseract）で動きます。 */
-const PROXY_URL = "";
+const PROXY_URL = "https://script.google.com/a/macros/g.ednet.tamano.okayama.jp/s/AKfycby69JLZ3liaWJMm6Bk-ZhrJvQNVlfw7GF9nrtxuCyHv9SZmnqpFnSAwwY97i8S8sURmRA/exec";
 
 function isProxyReady(){ return PROXY_URL && PROXY_URL.indexOf("http") === 0; }
 
