@@ -343,9 +343,13 @@ async function runOcr(canvas, lang, logger){
 /* ===== 高精度OCR（無料・GoogleドライブOCR）===== */
 /* ↓↓↓ Apps Scriptプロキシの「ウェブアプリURL」をここに貼ると、高精度OCRに切り替わります。
    空のままなら、これまでどおり内蔵OCR（Tesseract）で動きます。 */
-const PROXY_URL = "https://script.google.com/a/macros/g.ednet.tamano.okayama.jp/s/AKfycby69JLZ3liaWJMm6Bk-ZhrJvQNVlfw7GF9nrtxuCyHv9SZmnqpFnSAwwY97i8S8sURmRA/exec";
+/* 注意：「全員（Anyone）」でデプロイしたURLを使ってください。
+   /a/macros/（ドメイン限定）のURLはCORSで通信できません。 */
+const PROXY_URL = "https://script.google.com/macros/s/AKfycby69JLZ3liaWJMm6Bk-ZhrJvQNVlfw7GF9nrtxuCyHv9SZmnqpFnSAwwY97i8S8sURmRA/exec";
+const PROXY_SECRET = "tamano-yasashiku-2026";
 
 function isProxyReady(){ return PROXY_URL && PROXY_URL.indexOf("http") === 0; }
+function isDomainUrl(){ return PROXY_URL.indexOf("/a/macros/") !== -1; }
 
 function fileToBase64(file){
   return new Promise((resolve, reject) => {
@@ -375,6 +379,11 @@ function diagClear(){
 async function cloudOcr(file){
   diagLog("クラウドOCR開始。画像サイズ " + Math.round(file.size/1024) + " KB、種類 " + (file.type || "不明"));
   if(!isProxyReady()){ throw new Error("PROXY_URLが未設定です"); }
+  if(isDomainUrl()){
+    diagLog("このURLはドメイン限定（/a/macros/）形式です。CORSで通信できません。", "err");
+    diagLog("→ Apps Scriptを「アクセスできるユーザー: 全員」で再デプロイし、/a/macros/ が付かないURLを使ってください。", "err");
+    throw new Error("ドメイン限定URLは使用できません");
+  }
   const b64 = await fileToBase64(file);
   diagLog("画像を変換しました（送信データ " + Math.round(b64.length/1024) + " KB）。送信します…");
   let res;
@@ -382,11 +391,11 @@ async function cloudOcr(file){
     res = await fetch(PROXY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ image: b64, mimeType: file.type })
+      body: JSON.stringify({ image: b64, mimeType: file.type, secret: PROXY_SECRET })
     });
   }catch(e){
     diagLog("通信できませんでした（CORSまたはネットワーク遮断の可能性）: " + e.message, "err");
-    diagLog("→ 確認: 学校アカウントでログイン済みか／Apps Scriptが再デプロイ済みか／script.google.com が許可されているか", "err");
+    diagLog("→ 確認: デプロイの「アクセスできるユーザー」が『全員』か／再デプロイ済みか／script.google.com が許可されているか", "err");
     throw e;
   }
   diagLog("応答を受信しました。HTTPステータス " + res.status + (res.redirected ? "（リダイレクトあり）" : ""));
