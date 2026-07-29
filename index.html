@@ -93,6 +93,7 @@
       <label class="btn" for="photoInput">📷 写真をとる／えらぶ</label>
       <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
       <button class="btn" id="ocrBtn" disabled>文字を よみとる</button>
+      <button class="btn gray" id="testBtn">接続テスト</button>
       <span class="status" id="ocrStatus"></span>
     </div>
     <div class="row">
@@ -103,6 +104,7 @@
       </span>
     </div>
     <div class="hint">きれいに読み取るコツ：明るい場所で、影を作らず、まっすぐ真上から、文字を大きく（画面いっぱいに）写す。1ページを丸ごとより、読みたい範囲だけを大きく写すと精度が上がります。読み取った文字は下で直せます。</div>
+    <div id="diagBox" style="display:none; margin:10px 0; padding:10px 12px; background:#f8fafc; border:1px solid var(--line); border-radius:8px; font-family:Consolas,monospace; font-size:12px; line-height:1.6; max-height:220px; overflow:auto;"></div>
     <img id="preview" style="display:none; max-width:100%; border:1px solid var(--line); border-radius:10px; margin:10px 0;">
     <div id="ocrEditWrap" style="display:none;">
       <div class="hint" style="margin-top:12px;"><b>よみとった文字（まちがいがあれば直してください）</b></div>
@@ -354,15 +356,66 @@ function fileToBase64(file){
   });
 }
 
+/* 診断ログ表示 */
+function diagLog(msg, kind){
+  const box = document.getElementById("diagBox");
+  const line = document.createElement("div");
+  const t = new Date().toLocaleTimeString();
+  line.textContent = "[" + t + "] " + msg;
+  line.style.color = kind === "err" ? "#dc2626" : (kind === "ok" ? "#16a34a" : "#334155");
+  box.appendChild(line);
+  box.style.display = "block";
+  box.scrollTop = box.scrollHeight;
+}
+function diagClear(){
+  const box = document.getElementById("diagBox");
+  box.innerHTML = ""; box.style.display = "none";
+}
+
 async function cloudOcr(file){
+  diagLog("クラウドOCR開始。画像サイズ " + Math.round(file.size/1024) + " KB、種類 " + (file.type || "不明"));
+  if(!isProxyReady()){ throw new Error("PROXY_URLが未設定です"); }
   const b64 = await fileToBase64(file);
-  const res = await fetch(PROXY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ image: b64, mimeType: file.type })
-  });
-  const json = await res.json();
-  return json.text || "";
+  diagLog("画像を変換しました（送信データ " + Math.round(b64.length/1024) + " KB）。送信します…");
+  let res;
+  try{
+    res = await fetch(PROXY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ image: b64, mimeType: file.type })
+    });
+  }catch(e){
+    diagLog("通信できませんでした（CORSまたはネットワーク遮断の可能性）: " + e.message, "err");
+    diagLog("→ 確認: 学校アカウントでログイン済みか／Apps Scriptが再デプロイ済みか／script.google.com が許可されているか", "err");
+    throw e;
+  }
+  diagLog("応答を受信しました。HTTPステータス " + res.status + (res.redirected ? "（リダイレクトあり）" : ""));
+  const raw = await res.text();
+  if(!res.ok){
+    diagLog("サーバーがエラーを返しました: " + raw.slice(0, 200), "err");
+    throw new Error("HTTP " + res.status);
+  }
+  if(raw.trim().slice(0,1) === "<"){
+    diagLog("文字ではなくログイン画面(HTML)が返りました。学校アカウントでのログインが必要です。", "err");
+    throw new Error("ログインが必要");
+  }
+  let json;
+  try{ json = JSON.parse(raw); }
+  catch(e){
+    diagLog("応答を解析できませんでした: " + raw.slice(0, 200), "err");
+    throw e;
+  }
+  if(json.error){
+    diagLog("プロキシ側エラー: " + json.error, "err");
+    throw new Error(json.error);
+  }
+  const text = json.text || "";
+  if(!text){
+    diagLog("クラウドOCRは成功しましたが、文字が見つかりませんでした（写真を撮り直してください）。", "err");
+  } else {
+    diagLog("クラウドOCR成功。" + text.length + "文字を読み取りました。", "ok");
+  }
+  return text;
 }
 
 photoInput.addEventListener("change", e => {
@@ -386,32 +439,69 @@ ocrBtn.addEventListener("click", async () => {
       ocrStatus.textContent = "じゅんび中…（" + m.status + "）";
     }
   };
+  diagClear();
   try{
     let text = "";
+    let engine = "";
     if(isProxyReady()){
       // 高精度OCR（GoogleドライブOCR）。失敗したら内蔵OCRに切り替える
       try{
         ocrStatus.textContent = "クラウドで よみとり中…";
         text = await cloudOcr(photoFile);
+        engine = "クラウドOCR（GoogleドライブOCR）";
       }catch(e){
+        diagLog("内蔵OCR（Tesseract）に切り替えます。精度は下がります。", "err");
         ocrStatus.textContent = "クラウドOCR失敗。内蔵OCRで再試行中…";
         const canvas = await preprocess(photoFile);
         text = await runOcr(canvas, ocrDir === "v" ? "jpn_vert" : "jpn", logger);
+        engine = "内蔵OCR（Tesseract・低精度）";
       }
     } else {
-      // 内蔵OCR（Tesseract）
+      diagLog("PROXY_URLが未設定のため、内蔵OCRを使います。", "err");
       const canvas = await preprocess(photoFile);
       text = await runOcr(canvas, ocrDir === "v" ? "jpn_vert" : "jpn", logger);
+      engine = "内蔵OCR（Tesseract・低精度）";
     }
     text = text.replace(/[ \t　]+/g, "").replace(/\n{2,}/g, "\n").trim();
     ocrText.value = text;
     ocrEditWrap.style.display = "block";
     photoOut.innerHTML = await convertAsync(text);
-    ocrStatus.textContent = "よみとり かんりょう ✓（まちがいは下で直せます）";
+    diagLog("使用したOCR: " + engine, engine.indexOf("クラウド") === 0 ? "ok" : "err");
+    ocrStatus.textContent = "よみとり かんりょう ✓ / " + engine;
   }catch(err){
+    diagLog("読み取りに失敗しました: " + (err && err.message ? err.message : err), "err");
     ocrStatus.textContent = "よみとりに しっぱいしました。写真を撮り直してお試しください。";
   }
   ocrBtn.disabled = false;
+});
+
+/* 接続テスト：小さな画像を送ってプロキシとの通信だけを確認する */
+document.getElementById("testBtn").addEventListener("click", async () => {
+  diagClear();
+  diagLog("接続テストを開始します。");
+  diagLog("PROXY_URL: " + (PROXY_URL ? PROXY_URL.slice(0, 60) + "…" : "(未設定)"));
+  if(!isProxyReady()){
+    diagLog("PROXY_URLが未設定です。クラウドOCRは使われません。", "err");
+    return;
+  }
+  const c = document.createElement("canvas");
+  c.width = 400; c.height = 120;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, 400, 120);
+  ctx.fillStyle = "#000"; ctx.font = "48px serif";
+  ctx.fillText("学校 テスト", 20, 75);
+  c.toBlob(async (blob) => {
+    try{
+      const f = new File([blob], "test.png", { type: "image/png" });
+      const text = await cloudOcr(f);
+      if(text){
+        diagLog("テスト結果の文字: 「" + text.replace(/\s+/g, "") + "」", "ok");
+        diagLog("クラウドOCRは正常に動いています。写真の精度が低い場合は、撮影方法（範囲を絞る・明るく・正面から）を見直してください。", "ok");
+      }
+    }catch(e){
+      diagLog("接続テストに失敗しました。上の赤い行が原因です。", "err");
+    }
+  }, "image/png");
 });
 
 document.getElementById("ocrConvBtn").addEventListener("click", async () => {
