@@ -39,6 +39,15 @@
         border-radius:12px; font-size:26px; line-height:2.4; min-height:70px; }
   .out:empty::before{ content:"ここに よみやすい ぶんが でます"; color:#9aa7b8; font-size:18px; }
   ruby rt{ font-size:.5em; color:var(--blue-d); font-weight:700; }
+  .pane-title{ font-size:15px; font-weight:700; color:var(--blue-d); margin-top:10px; }
+  @media (min-width:900px){
+    #compareWrap.side{ display:grid; grid-template-columns:1fr 1fr;
+                       grid-template-rows:auto 1fr; column-gap:16px; align-items:start; }
+    #compareWrap.side > *:nth-child(1){ grid-column:1; grid-row:1; }
+    #compareWrap.side > *:nth-child(2){ grid-column:1; grid-row:2; }
+    #compareWrap.side > *:nth-child(3){ grid-column:2; grid-row:1; }
+    #compareWrap.side > *:nth-child(4){ grid-column:2; grid-row:2; }
+  }
   .status{ font-size:14px; color:#64748b; margin-left:8px; }
   .live{ color:#94a3b8; }
   .hint{ font-size:13px; color:#64748b; margin-top:10px; }
@@ -102,10 +111,25 @@
         <button data-dir="h" class="on">横書き</button>
         <button data-dir="v">縦書き（国語など）</button>
       </span>
+      <label style="font-size:14px; font-weight:700; margin-left:10px;">ならべ方</label>
+      <span class="seg" id="layoutSeg">
+        <button data-lay="stack" class="on">上下</button>
+        <button data-lay="side">左右</button>
+      </span>
     </div>
     <div class="hint">きれいに読み取るコツ：明るい場所で、影を作らず、まっすぐ真上から、文字を大きく（画面いっぱいに）写す。1ページを丸ごとより、読みたい範囲だけを大きく写すと精度が上がります。読み取った文字は下で直せます。</div>
     <div id="diagBox" style="display:none; margin:10px 0; padding:10px 12px; background:#f8fafc; border:1px solid var(--line); border-radius:8px; font-family:Consolas,monospace; font-size:12px; line-height:1.6; max-height:220px; overflow:auto;"></div>
-    <img id="preview" style="display:none; max-width:100%; border:1px solid var(--line); border-radius:10px; margin:10px 0;">
+
+    <!-- 写真とルビ付き文章を並べて表示 -->
+    <div id="compareWrap" style="display:none;">
+      <div class="pane-title">📷 とった写真</div>
+      <img id="preview" style="max-width:100%; border:1px solid var(--line); border-radius:10px; margin:6px 0 14px;">
+      <div class="pane-title">📖 よみやすくした文（ルビつき）</div>
+      <div class="out big" id="photoOut"></div>
+    </div>
+
+    <img id="previewOnly" style="display:none; max-width:100%; border:1px solid var(--line); border-radius:10px; margin:10px 0;">
+
     <div id="ocrEditWrap" style="display:none;">
       <div class="hint" style="margin-top:12px;"><b>よみとった文字（まちがいがあれば直してください）</b></div>
       <textarea id="ocrText" placeholder="ここに よみとった文字が でます。"></textarea>
@@ -114,7 +138,6 @@
         <button class="btn gray" id="clearPhoto">けす</button>
       </div>
     </div>
-    <div class="out" id="photoOut"></div>
   </div>
 
   <!-- テキストパネル -->
@@ -282,12 +305,22 @@ document.getElementById("copyBtn").onclick = () => {
 /* 写真（OCR） */
 const photoInput = document.getElementById("photoInput");
 const preview = document.getElementById("preview");
+const previewOnly = document.getElementById("previewOnly");
+const compareWrap = document.getElementById("compareWrap");
 const ocrBtn = document.getElementById("ocrBtn");
 const ocrStatus = document.getElementById("ocrStatus");
 const ocrEditWrap = document.getElementById("ocrEditWrap");
 const ocrText = document.getElementById("ocrText");
 const photoOut = document.getElementById("photoOut");
 let photoFile = null;
+
+const layoutSeg = document.getElementById("layoutSeg");
+layoutSeg.addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  [...layoutSeg.children].forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  compareWrap.classList.toggle("side", b.dataset.lay === "side");
+});
 
 let ocrDir = "h";
 const dirSeg = document.getElementById("dirSeg");
@@ -431,8 +464,13 @@ photoInput.addEventListener("change", e => {
   const f = e.target.files[0];
   if(!f) return;
   photoFile = f;
-  preview.src = URL.createObjectURL(f);
-  preview.style.display = "block";
+  const url = URL.createObjectURL(f);
+  previewOnly.src = url;
+  preview.src = url;
+  previewOnly.style.display = "block";
+  compareWrap.style.display = "none";
+  ocrEditWrap.style.display = "none";
+  photoOut.innerHTML = "";
   ocrBtn.disabled = false;
   ocrStatus.textContent = "「文字を よみとる」を おしてください";
 });
@@ -475,6 +513,8 @@ ocrBtn.addEventListener("click", async () => {
     ocrText.value = text;
     ocrEditWrap.style.display = "block";
     photoOut.innerHTML = await convertAsync(text);
+    previewOnly.style.display = "none";
+    compareWrap.style.display = "block";
     diagLog("使用したOCR: " + engine, engine.indexOf("クラウド") === 0 ? "ok" : "err");
     ocrStatus.textContent = "よみとり かんりょう ✓ / " + engine;
   }catch(err){
@@ -518,8 +558,10 @@ document.getElementById("ocrConvBtn").addEventListener("click", async () => {
 });
 document.getElementById("clearPhoto").addEventListener("click", () => {
   photoFile = null; photoInput.value = ""; ocrText.value = "";
-  preview.style.display = "none"; ocrEditWrap.style.display = "none";
+  previewOnly.style.display = "none"; compareWrap.style.display = "none";
+  ocrEditWrap.style.display = "none";
   photoOut.innerHTML = ""; ocrStatus.textContent = ""; ocrBtn.disabled = true;
+  diagClear();
 });
 
 /* 音声 */
