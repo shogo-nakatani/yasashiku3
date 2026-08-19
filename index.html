@@ -99,8 +99,9 @@
   <!-- 写真パネル -->
   <div class="panel" id="panelPhoto">
     <div class="row">
-      <label class="btn" for="photoInput">📷 写真をとる／えらぶ</label>
-      <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none">
+      <button class="btn" id="camBtn">📷 写真をとる</button>
+      <label class="btn" for="photoInput">🖼️ 写真をえらぶ</label>
+      <input type="file" id="photoInput" accept="image/*" style="display:none">
       <button class="btn" id="ocrBtn" disabled>文字を よみとる</button>
       <button class="btn gray" id="testBtn">接続テスト</button>
       <span class="status" id="ocrStatus"></span>
@@ -117,7 +118,18 @@
         <button data-lay="side">左右</button>
       </span>
     </div>
-    <div class="hint">きれいに読み取るコツ：明るい場所で、影を作らず、まっすぐ真上から、文字を大きく（画面いっぱいに）写す。1ページを丸ごとより、読みたい範囲だけを大きく写すと精度が上がります。読み取った文字は下で直せます。</div>
+    <div class="hint">「写真をとる」＝この画面でカメラを開いて撮影／「写真をえらぶ」＝保存済みの写真から選ぶ。きれいに読み取るコツ：明るい場所で、影を作らず、まっすぐ真上から、文字を大きく（画面いっぱいに）写す。1ページを丸ごとより、読みたい範囲だけを大きく写すと精度が上がります。読み取った文字は下で直せます。</div>
+    <!-- アプリ内カメラ -->
+    <div id="camWrap" style="display:none; margin:10px 0;">
+      <video id="camVideo" playsinline autoplay muted style="width:100%; max-height:60vh; background:#000; border-radius:10px;"></video>
+      <div class="row">
+        <button class="btn" id="shotBtn">⬤ ここを さつえい</button>
+        <button class="btn gray" id="camCloseBtn">とじる</button>
+        <button class="btn gray" id="camSwapBtn">カメラ切替</button>
+        <span class="status" id="camStatus"></span>
+      </div>
+    </div>
+
     <div id="diagBox" style="display:none; margin:10px 0; padding:10px 12px; background:#f8fafc; border:1px solid var(--line); border-radius:8px; font-family:Consolas,monospace; font-size:12px; line-height:1.6; max-height:220px; overflow:auto;"></div>
 
     <!-- 写真とルビ付き文章を並べて表示 -->
@@ -288,9 +300,9 @@ function tab(which){
     document.getElementById("panel" + map[k]).classList.toggle("on", on);
   }
 }
-document.getElementById("tabVoice").onclick = () => tab("voice");
+document.getElementById("tabVoice").onclick = () => { tab("voice"); closeCamera(false); };
 document.getElementById("tabPhoto").onclick = () => tab("photo");
-document.getElementById("tabText").onclick = () => tab("text");
+document.getElementById("tabText").onclick = () => { tab("text"); closeCamera(false); };
 
 /* テキスト変換 */
 const src = document.getElementById("src");
@@ -460,6 +472,82 @@ async function cloudOcr(file){
   return text;
 }
 
+/* ===== アプリ内カメラ ===== */
+const camWrap = document.getElementById("camWrap");
+const camVideo = document.getElementById("camVideo");
+const camStatus = document.getElementById("camStatus");
+let camStream = null;
+let camFacing = "environment";
+
+function usePhoto(file){
+  photoFile = file;
+  const url = URL.createObjectURL(file);
+  previewOnly.src = url;
+  preview.src = url;
+  previewOnly.style.display = "block";
+  compareWrap.style.display = "none";
+  ocrEditWrap.style.display = "none";
+  photoOut.innerHTML = "";
+  ocrBtn.disabled = false;
+  ocrStatus.textContent = "「文字を よみとる」を おしてください";
+}
+
+async function openCamera(){
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    camStatus.textContent = "このブラウザではカメラを開けません。「写真をえらぶ」をお使いください。";
+    camWrap.style.display = "block";
+    return;
+  }
+  camWrap.style.display = "block";
+  camStatus.textContent = "カメラを ひらいています…";
+  try{
+    closeCamera(true);
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: camFacing, width: { ideal: 2560 }, height: { ideal: 1440 } },
+      audio: false
+    });
+    camVideo.srcObject = camStream;
+    await camVideo.play();
+    camStatus.textContent = "ページを まっすぐ・大きく うつして「さつえい」";
+  }catch(e){
+    camStatus.textContent = "カメラを つかえません（" + e.name + "）。許可を「許可する」にしてください。";
+  }
+}
+
+function closeCamera(keepOpen){
+  if(camStream){
+    camStream.getTracks().forEach(t => t.stop());
+    camStream = null;
+  }
+  if(!keepOpen){
+    camVideo.srcObject = null;
+    camWrap.style.display = "none";
+    camStatus.textContent = "";
+  }
+}
+
+document.getElementById("camBtn").addEventListener("click", openCamera);
+document.getElementById("camCloseBtn").addEventListener("click", () => closeCamera(false));
+document.getElementById("camSwapBtn").addEventListener("click", () => {
+  camFacing = (camFacing === "environment") ? "user" : "environment";
+  openCamera();
+});
+
+document.getElementById("shotBtn").addEventListener("click", () => {
+  if(!camStream){ camStatus.textContent = "先に「写真をとる」でカメラを開いてください。"; return; }
+  const w = camVideo.videoWidth, h = camVideo.videoHeight;
+  if(!w || !h){ camStatus.textContent = "カメラの準備中です。少し待ってからもう一度。"; return; }
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  c.getContext("2d").drawImage(camVideo, 0, 0, w, h);
+  c.toBlob(blob => {
+    const f = new File([blob], "camera.jpg", { type: "image/jpeg" });
+    usePhoto(f);
+    closeCamera(false);
+    ocrStatus.textContent = "さつえい できました。「文字を よみとる」を おしてください";
+  }, "image/jpeg", 0.95);
+});
+
 photoInput.addEventListener("change", e => {
   const f = e.target.files[0];
   if(!f) return;
@@ -561,6 +649,7 @@ document.getElementById("clearPhoto").addEventListener("click", () => {
   previewOnly.style.display = "none"; compareWrap.style.display = "none";
   ocrEditWrap.style.display = "none";
   photoOut.innerHTML = ""; ocrStatus.textContent = ""; ocrBtn.disabled = true;
+  closeCamera(false);
   diagClear();
 });
 
