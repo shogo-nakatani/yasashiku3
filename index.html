@@ -544,11 +544,44 @@ function listVoices(){
   return vs.map(v => v.name + "[" + v.lang + "]").join(" / ");
 }
 
+let userStopped = false;
+
 function stopSpeak(){
+  userStopped = true;
   if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
   if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
   utterKeep.length = 0;
   if(speakStatus) speakStatus.textContent = "";
+}
+
+/* 1文を発話する。canceled等で失敗したら、設定を変えて自動で再試行する */
+function speakOne(textPart, onDone, attempt){
+  attempt = attempt || 0;
+  const u = new SpeechSynthesisUtterance(textPart);
+  // 1回目は日本語音声を指定、失敗したら2回目は lang だけで再挑戦
+  if(attempt === 0 && jaVoice){ u.voice = jaVoice; }
+  u.lang = "ja-JP";
+  u.rate = speakRate;
+  u.pitch = 1;
+  u.volume = 1;
+  u.onend = () => onDone(true);
+  u.onerror = (ev) => {
+    const code = (ev && ev.error) ? ev.error : "不明";
+    if(userStopped){ return; }
+    if(attempt < 2 && (code === "canceled" || code === "interrupted" || code === "synthesis-failed")){
+      // 少し待ってから、指定を変えて再挑戦
+      setTimeout(() => speakOne(textPart, onDone, attempt + 1), 250);
+      return;
+    }
+    if(speakStatus) speakStatus.textContent = "よみあげ失敗（" + code + "）";
+    diagLog("よみあげエラー: " + code + "（" + (attempt + 1) + "回目）", "err");
+    if(code === "language-unavailable" || code === "voice-unavailable"){
+      diagLog("→ 設定 → ユーザー補助 → テキスト読み上げ で日本語の音声を追加してください。", "err");
+    }
+    onDone(false);
+  };
+  utterKeep.push(u);
+  window.speechSynthesis.speak(u);
 }
 
 function speakFrom(el){
@@ -570,7 +603,6 @@ function speakFrom(el){
     return;
   }
 
-  window.speechSynthesis.cancel();
   if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
   utterKeep.length = 0;
 
@@ -581,45 +613,36 @@ function speakFrom(el){
   const chunks = parts.length ? parts : [text];
   let i = 0;
 
-  const speakNext = () => {
+  const speakNext = (ok) => {
+    if(ok === false){ return; }
+    if(userStopped){ return; }
     if(i >= chunks.length){
       if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
       if(speakStatus) speakStatus.textContent = "よみあげ おわり";
       return;
     }
-    const u = new SpeechSynthesisUtterance(chunks[i++]);
-    if(jaVoice){ u.voice = jaVoice; }
-    u.lang = (jaVoice && jaVoice.lang) ? jaVoice.lang : "ja-JP";
-    u.rate = speakRate;
-    u.pitch = 1;
-    u.volume = 1;
-    u.onend = speakNext;
-    u.onerror = (ev) => {
-      const code = (ev && ev.error) ? ev.error : "不明";
-      if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
-      if(code === "interrupted" || code === "canceled") return;
-      if(speakStatus) speakStatus.textContent = "よみあげ失敗（" + code + "）";
-      if(code === "language-unavailable" || code === "voice-unavailable" || !jaVoice){
-        diagLog("日本語の音声が端末に入っていません（" + code + "）。", "err");
-        diagLog("→ 設定 → ユーザー補助 → 音声合成（テキスト読み上げ）→ 日本語の音声をインストールしてください。", "err");
-      } else {
-        diagLog("よみあげエラー: " + code, "err");
-      }
-      diagLog("使える音声: " + listVoices());
-    };
-    utterKeep.push(u);
-    window.speechSynthesis.speak(u);
+    speakOne(chunks[i++], speakNext, 0);
   };
 
-  if(speakStatus) speakStatus.textContent = "よみあげ中…";
-  // Chromeが長文で止まる不具合への対策
-  keepAlive = setInterval(() => {
-    if(window.speechSynthesis.speaking && !window.speechSynthesis.paused){
-      window.speechSynthesis.resume();
-    }
-  }, 5000);
-  // cancel直後のspeakは失敗しやすいので少し待つ
-  setTimeout(speakNext, 120);
+  const start = () => {
+    userStopped = false;
+    if(speakStatus) speakStatus.textContent = "よみあげ中…";
+    keepAlive = setInterval(() => {
+      if(window.speechSynthesis.speaking && !window.speechSynthesis.paused){
+        window.speechSynthesis.resume();
+      }
+    }, 5000);
+    speakNext(true);
+  };
+
+  // すでに話している時だけ止め、十分に間をあけてから開始する
+  if(window.speechSynthesis.speaking || window.speechSynthesis.pending){
+    userStopped = true;
+    window.speechSynthesis.cancel();
+    setTimeout(start, 300);
+  } else {
+    start();
+  }
 }
 
 /* 音声チェック：使える音声を一覧表示し、テスト発話する */
@@ -630,12 +653,16 @@ function checkVoices(){
   diagLog("使える音声: " + listVoices());
   if(jaVoice){
     diagLog("日本語の音声: " + jaVoice.name + "（" + jaVoice.lang + "）", "ok");
-    const u = new SpeechSynthesisUtterance("こんにちは。よみあげの テストです。");
-    u.voice = jaVoice; u.lang = jaVoice.lang; u.rate = speakRate;
-    u.onerror = ev => diagLog("テスト失敗: " + (ev.error || "不明"), "err");
-    utterKeep.push(u);
-    window.speechSynthesis.cancel();
-    setTimeout(() => window.speechSynthesis.speak(u), 120);
+    userStopped = false;
+    const run = () => speakOne("こんにちは。よみあげの テストです。", (ok) => {
+      if(ok) diagLog("テスト成功。よみあげは つかえます。", "ok");
+    }, 0);
+    if(window.speechSynthesis.speaking || window.speechSynthesis.pending){
+      window.speechSynthesis.cancel();
+      setTimeout(run, 300);
+    } else {
+      run();
+    }
   } else {
     diagLog("日本語の音声が見つかりません。", "err");
     diagLog("→ Chromebookの 設定 → ユーザー補助 → 音声合成（テキスト読み上げ）→ 音声を追加 で日本語を入れてください。", "err");
