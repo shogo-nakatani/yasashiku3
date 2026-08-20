@@ -147,7 +147,15 @@
       <textarea id="ocrText" placeholder="ここに よみとった文字が でます。"></textarea>
       <div class="row">
         <button class="btn" id="ocrConvBtn">ルビをふる／やさしくする</button>
+        <button class="btn" id="speakPhotoBtn">🔊 よみあげる</button>
+        <button class="btn gray" id="stopPhotoBtn">■ とめる</button>
         <button class="btn gray" id="clearPhoto">けす</button>
+      </div>
+      <div class="row">
+        <label style="font-size:14px; font-weight:700;">よみあげの はやさ</label>
+        <input type="range" id="rateRange" min="0.5" max="1.3" step="0.1" value="0.9" style="width:160px;">
+        <span class="status" id="rateOut">0.9倍</span>
+        <span class="status" id="speakStatus"></span>
       </div>
     </div>
   </div>
@@ -157,6 +165,8 @@
     <textarea id="src" placeholder="ここに教科書やワークの文をはりつけてください。"></textarea>
     <div class="row">
       <button class="btn" id="convBtn" disabled>やさしくする</button>
+      <button class="btn" id="speakTextBtn">🔊 よみあげる</button>
+      <button class="btn gray" id="stopTextBtn">■ とめる</button>
       <button class="btn gray" id="clearText">けす</button>
       <button class="btn gray" id="copyBtn">コピー</button>
     </div>
@@ -300,9 +310,9 @@ function tab(which){
     document.getElementById("panel" + map[k]).classList.toggle("on", on);
   }
 }
-document.getElementById("tabVoice").onclick = () => { tab("voice"); closeCamera(false); };
-document.getElementById("tabPhoto").onclick = () => tab("photo");
-document.getElementById("tabText").onclick = () => { tab("text"); closeCamera(false); };
+document.getElementById("tabVoice").onclick = () => { tab("voice"); closeCamera(false); stopSpeak(); };
+document.getElementById("tabPhoto").onclick = () => { tab("photo"); stopSpeak(); };
+document.getElementById("tabText").onclick = () => { tab("text"); closeCamera(false); stopSpeak(); };
 
 /* テキスト変換 */
 const src = document.getElementById("src");
@@ -471,6 +481,79 @@ async function cloudOcr(file){
   }
   return text;
 }
+
+/* ===== よみあげ（音声合成） ===== */
+const speakStatus = document.getElementById("speakStatus");
+const rateRange = document.getElementById("rateRange");
+const rateOut = document.getElementById("rateOut");
+let speakRate = 0.9;
+
+rateRange.addEventListener("input", () => {
+  speakRate = parseFloat(rateRange.value);
+  rateOut.textContent = speakRate.toFixed(1) + "倍";
+});
+
+/* ルビ付きHTMLから「読み」だけを取り出す（漢字ではなく、ふりがなで読ませる） */
+function readingTextFrom(el){
+  let out = "";
+  const walk = node => {
+    for(const n of node.childNodes){
+      if(n.nodeType === 3){ out += n.nodeValue; }
+      else if(n.nodeName === "RUBY"){
+        const rt = n.querySelector("rt");
+        if(rt){ out += rt.textContent; }
+        else { walk(n); }
+      }
+      else if(n.nodeName === "RT"){ /* ruby内で処理済み */ }
+      else if(n.nodeName === "BR"){ out += "\n"; }
+      else { walk(n); }
+    }
+  };
+  walk(el);
+  return out;
+}
+
+function stopSpeak(){
+  if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
+  if(speakStatus) speakStatus.textContent = "";
+}
+
+function speakFrom(el){
+  if(!window.speechSynthesis){
+    if(speakStatus) speakStatus.textContent = "このブラウザは よみあげに対応していません（Chrome推奨）";
+    return;
+  }
+  const text = readingTextFrom(el).replace(/\s+/g, " ").trim();
+  if(!text){
+    if(speakStatus) speakStatus.textContent = "よみあげる文がありません。先に よみとって ください。";
+    return;
+  }
+  window.speechSynthesis.cancel();
+  // 長文はブラウザが途中で止まるため、文ごとに分けて読ませる
+  const parts = text.split(/(?<=[。．！？!?])/).filter(s => s.trim());
+  const chunks = parts.length ? parts : [text];
+  let i = 0;
+  const speakNext = () => {
+    if(i >= chunks.length){
+      if(speakStatus) speakStatus.textContent = "よみあげ おわり";
+      return;
+    }
+    const u = new SpeechSynthesisUtterance(chunks[i++]);
+    u.lang = "ja-JP";
+    u.rate = speakRate;
+    u.pitch = 1;
+    u.onend = speakNext;
+    u.onerror = () => { if(speakStatus) speakStatus.textContent = "よみあげに しっぱいしました"; };
+    window.speechSynthesis.speak(u);
+  };
+  if(speakStatus) speakStatus.textContent = "よみあげ中…";
+  speakNext();
+}
+
+document.getElementById("speakPhotoBtn").addEventListener("click", () => speakFrom(photoOut));
+document.getElementById("stopPhotoBtn").addEventListener("click", stopSpeak);
+document.getElementById("speakTextBtn").addEventListener("click", () => speakFrom(textOut));
+document.getElementById("stopTextBtn").addEventListener("click", stopSpeak);
 
 /* ===== アプリ内カメラ ===== */
 const camWrap = document.getElementById("camWrap");
@@ -650,6 +733,7 @@ document.getElementById("clearPhoto").addEventListener("click", () => {
   ocrEditWrap.style.display = "none";
   photoOut.innerHTML = ""; ocrStatus.textContent = ""; ocrBtn.disabled = true;
   closeCamera(false);
+  stopSpeak();
   diagClear();
 });
 
