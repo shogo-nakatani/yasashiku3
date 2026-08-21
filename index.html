@@ -63,6 +63,13 @@
   <p>自分の声で書いたり、教科書やワークの文を「習った漢字だけ」にして読みやすくします。</p>
 </header>
 
+<!-- 読み上げ中いつでも押せる、画面に固定した停止ボタン -->
+<div id="floatStop" style="display:none; position:fixed; right:18px; bottom:18px; z-index:9999;
+     background:#dc2626; color:#fff; border-radius:14px; padding:14px 22px; font-size:18px; font-weight:700;
+     box-shadow:0 6px 18px rgba(0,0,0,.25); cursor:pointer; user-select:none;">
+  ■ とめる（Escキーでも可）
+</div>
+
 <div class="wrap">
   <div class="bar">
     <span><label>漢字を残す学年</label>
@@ -158,6 +165,8 @@
         <button class="btn" id="speakPhotoBtn">🔊 よみあげる／つづきから</button>
         <button class="btn gray" id="stopPhotoBtn">■ とめる</button>
         <button class="btn gray" id="restartPhotoBtn">⏮ はじめから</button>
+        <label style="font-size:14px;"><input type="checkbox" id="autoScrollChk" checked> 読む場所を追いかける</label>
+        <span class="status" id="scrollNote" style="display:none; color:#d97706;">追いかけを止めました</span>
         <button class="btn gray" id="clearPhoto">けす</button>
       </div>
       <div class="row">
@@ -676,6 +685,8 @@ function stopSpeak(){
   if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
   if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
   utterKeep.length = 0;
+  const fs = document.getElementById("floatStop");
+  if(fs) fs.style.display = "none";
   // 止めた文は container._resume に残してあるので、次は続きから読める
   if(speakStatus){
     const n = (curContainer && typeof curContainer._resume === "number") ? curContainer._resume + 1 : 0;
@@ -745,15 +756,40 @@ function speechTextFor(el, originalText){
 
 /* 今どの文を読んでいるか画面で示す */
 let curContainer = null;
+let autoScroll = true;      // 自動で追いかけるか
+let userScrolled = false;   // 自分でスクロールしたか
+
 function markSentence(container, idx){
   if(!container) return;
   container.querySelectorAll(".sent.now").forEach(x => x.classList.remove("now"));
   const el = container.querySelector('.sent[data-i="' + idx + '"]');
   if(el){
     el.classList.add("now");
-    if(el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+    // 自分でスクロールした後は、画面を勝手に動かさない
+    if(autoScroll && !userScrolled && el.scrollIntoView){
+      el.scrollIntoView({ block: "nearest" });
+    }
   }
 }
+
+/* 自分でスクロールしたら、追いかけを止める */
+["wheel", "touchmove", "keydown"].forEach(ev => {
+  window.addEventListener(ev, (e) => {
+    if(ev === "keydown" && !["ArrowDown","ArrowUp","PageDown","PageUp","Home","End"," "].includes(e.key)) return;
+    if(window.speechSynthesis && window.speechSynthesis.speaking){
+      if(!userScrolled){
+        userScrolled = true;
+        const t = document.getElementById("scrollNote");
+        if(t) t.style.display = "inline";
+      }
+    }
+  }, { passive: true });
+});
+
+/* Esc キーでも止められる */
+window.addEventListener("keydown", (e) => {
+  if(e.key === "Escape"){ stopSpeak(); }
+});
 
 /* 指定した文から読み上げる（startIdx を省略すると続きから） */
 function speakContainer(container, startIdx){
@@ -786,6 +822,8 @@ function speakContainer(container, startIdx){
       container._resume = 0;
       markSentence(container, -1);
       if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
+      const fs = document.getElementById("floatStop");
+      if(fs) fs.style.display = "none";
       if(speakStatus) speakStatus.textContent = "よみあげ おわり";
       return;
     }
@@ -802,6 +840,11 @@ function speakContainer(container, startIdx){
   };
 
   if(speakStatus) speakStatus.textContent = "よみあげ中…";
+  userScrolled = false;               // 読み始めたら、追いかけを再開する
+  const note = document.getElementById("scrollNote");
+  if(note) note.style.display = "none";
+  const fs = document.getElementById("floatStop");
+  if(fs) fs.style.display = "block";  // いつでも止められるボタンを出す
   keepAlive = setInterval(() => {
     if(window.speechSynthesis.speaking && !window.speechSynthesis.paused){
       window.speechSynthesis.resume();
@@ -942,6 +985,18 @@ document.getElementById("stopTextBtn").addEventListener("click", stopSpeak);
 document.getElementById("restartTextBtn").addEventListener("click", () => speakContainer(textOut, 0));
 enableClickToStart(photoOut);
 enableClickToStart(textOut);
+
+/* 画面に固定した停止ボタン */
+const floatStop = document.getElementById("floatStop");
+floatStop.addEventListener("click", stopSpeak);
+function showFloatStop(on){ floatStop.style.display = on ? "block" : "none"; }
+
+/* 「読む場所を追いかける」の切替 */
+document.getElementById("autoScrollChk").addEventListener("change", (e) => {
+  autoScroll = e.target.checked;
+  const t = document.getElementById("scrollNote");
+  if(autoScroll){ userScrolled = false; if(t) t.style.display = "none"; }
+});
 
 /* ===== アプリ内カメラ ===== */
 const camWrap = document.getElementById("camWrap");
