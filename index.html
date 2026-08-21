@@ -40,6 +40,9 @@
   .out:empty::before{ content:"ここに よみやすい ぶんが でます"; color:#9aa7b8; font-size:18px; }
   ruby rt{ font-size:.5em; color:var(--blue-d); font-weight:700; }
   .pane-title{ font-size:15px; font-weight:700; color:var(--blue-d); margin-top:10px; }
+  .sent{ cursor:pointer; border-radius:6px; padding:1px 2px; }
+  .sent:hover{ background:#eef4ff; outline:1px dashed var(--blue); }
+  .sent.now{ background:#fff3bf; box-shadow:0 0 0 2px #ffd43b inset; }
   @media (min-width:900px){
     #compareWrap.side{ display:grid; grid-template-columns:1fr 1fr;
                        grid-template-rows:auto 1fr; column-gap:16px; align-items:start; }
@@ -152,8 +155,9 @@
       <textarea id="ocrText" placeholder="ここに よみとった文字が でます。"></textarea>
       <div class="row">
         <button class="btn" id="ocrConvBtn">ルビをふる／やさしくする</button>
-        <button class="btn" id="speakPhotoBtn">🔊 よみあげる</button>
+        <button class="btn" id="speakPhotoBtn">🔊 よみあげる／つづきから</button>
         <button class="btn gray" id="stopPhotoBtn">■ とめる</button>
+        <button class="btn gray" id="restartPhotoBtn">⏮ はじめから</button>
         <button class="btn gray" id="clearPhoto">けす</button>
       </div>
       <div class="row">
@@ -183,8 +187,9 @@
     <textarea id="src" placeholder="ここに教科書やワークの文をはりつけてください。"></textarea>
     <div class="row">
       <button class="btn" id="convBtn" disabled>やさしくする</button>
-      <button class="btn" id="speakTextBtn">🔊 よみあげる</button>
+      <button class="btn" id="speakTextBtn">🔊 よみあげる／つづきから</button>
       <button class="btn gray" id="stopTextBtn">■ とめる</button>
+      <button class="btn gray" id="restartTextBtn">⏮ はじめから</button>
       <button class="btn gray" id="clearText">けす</button>
       <button class="btn gray" id="copyBtn">コピー</button>
     </div>
@@ -246,6 +251,40 @@ function tokenize(text){
     pending[id] = resolve;
     worker.postMessage({ type: "tokenize", id: id, text: text });
   });
+}
+
+/* 文に区切る（。！？.!? と改行で区切る） */
+function splitSentences(text){
+  if(!text) return [];
+  const out = [];
+  text.split(/\n/).forEach(line => {
+    if(!line.trim()) return;
+    const parts = line.split(/([。．！？!?.])/);
+    let buf = "";
+    for(let i = 0; i < parts.length; i++){
+      buf += parts[i];
+      if(/[。．！？!?.]/.test(parts[i]) || i === parts.length - 1){
+        if(buf.trim()) out.push(buf);
+        buf = "";
+      }
+    }
+  });
+  return out.length ? out : [text];
+}
+
+/* 文ごとに span で包んで表示する（クリックでその文から読める） */
+async function renderSentences(container, text){
+  const chunks = splitSentences(text);
+  const htmls = [];
+  for(const s of chunks){
+    htmls.push(await convertAsync(s));
+  }
+  container.innerHTML = htmls
+    .map((h, i) => '<span class="sent" data-i="' + i + '">' + h + '</span>')
+    .join(" ");
+  container._chunks = chunks;
+  container._resume = 0;
+  return chunks;
 }
 
 async function convertAsync(text){
@@ -338,7 +377,7 @@ document.getElementById("tabText").onclick = () => { tab("text"); closeCamera(fa
 /* テキスト変換 */
 const src = document.getElementById("src");
 const textOut = document.getElementById("textOut");
-document.getElementById("convBtn").onclick = async () => { textOut.innerHTML = await convertAsync(src.value); };
+document.getElementById("convBtn").onclick = async () => { await renderSentences(textOut, src.value); };
 document.getElementById("clearText").onclick = () => { src.value=""; textOut.innerHTML=""; };
 document.getElementById("copyBtn").onclick = () => {
   const t = textOut.innerText || "";
@@ -637,7 +676,11 @@ function stopSpeak(){
   if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
   if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
   utterKeep.length = 0;
-  if(speakStatus) speakStatus.textContent = "";
+  // 止めた文は container._resume に残してあるので、次は続きから読める
+  if(speakStatus){
+    const n = (curContainer && typeof curContainer._resume === "number") ? curContainer._resume + 1 : 0;
+    speakStatus.textContent = n ? ("とめました（" + n + "文目から つづきます）") : "";
+  }
 }
 
 /* 1文を発話する。canceled等で失敗したら、設定を変えて自動で再試行する */
@@ -698,6 +741,88 @@ function speechTextFor(el, originalText){
     return originalText;
   }
   return readingTextFrom(el);
+}
+
+/* 今どの文を読んでいるか画面で示す */
+let curContainer = null;
+function markSentence(container, idx){
+  if(!container) return;
+  container.querySelectorAll(".sent.now").forEach(x => x.classList.remove("now"));
+  const el = container.querySelector('.sent[data-i="' + idx + '"]');
+  if(el){
+    el.classList.add("now");
+    if(el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+  }
+}
+
+/* 指定した文から読み上げる（startIdx を省略すると続きから） */
+function speakContainer(container, startIdx){
+  if(!window.speechSynthesis){
+    if(speakStatus) speakStatus.textContent = "このブラウザは よみあげに対応していません（Chrome推奨）";
+    return;
+  }
+  const chunks = container._chunks || [];
+  if(!chunks.length){
+    if(speakStatus) speakStatus.textContent = "よみあげる文がありません。先に よみとって ください。";
+    return;
+  }
+  let i = (typeof startIdx === "number") ? startIdx : (container._resume || 0);
+  if(i >= chunks.length) i = 0;
+
+  curContainer = container;
+  if(window.speechSynthesis.speaking || window.speechSynthesis.pending){
+    window.speechSynthesis.cancel();
+  }
+  userStopped = false;
+  try{ window.speechSynthesis.resume(); }catch(e){}
+  if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
+  utterKeep.length = 0;
+
+  const spans = container.querySelectorAll(".sent");
+
+  const next = (ok) => {
+    if(ok === false || userStopped) return;
+    if(i >= chunks.length){
+      container._resume = 0;
+      markSentence(container, -1);
+      if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
+      if(speakStatus) speakStatus.textContent = "よみあげ おわり";
+      return;
+    }
+    const idx = i;
+    container._resume = idx;          // 止めたらこの文から再開する
+    markSentence(container, idx);
+    i++;
+    // 「ふりがなのとおり」なら画面の読み、それ以外は元の文を読む
+    let part = chunks[idx];
+    if(speakSrc !== "orig" && spans[idx]){
+      part = readingTextFrom(spans[idx]);
+    }
+    speakOne(part, next, 0);
+  };
+
+  if(speakStatus) speakStatus.textContent = "よみあげ中…";
+  keepAlive = setInterval(() => {
+    if(window.speechSynthesis.speaking && !window.speechSynthesis.paused){
+      window.speechSynthesis.resume();
+    }
+  }, 5000);
+  if(watchdog){ clearTimeout(watchdog); }
+  watchdog = setTimeout(() => {
+    if(!window.speechSynthesis.speaking){
+      diagLog("発話が始まりませんでした。音量・ミュートや、声の選択をご確認ください。", "err");
+    }
+  }, 2500);
+  next(true);
+}
+
+/* 文をクリックすると、そこから読み始める */
+function enableClickToStart(container){
+  container.addEventListener("click", e => {
+    const s = e.target.closest(".sent");
+    if(!s || !container._chunks) return;
+    speakContainer(container, parseInt(s.dataset.i, 10));
+  });
 }
 
 function speakFrom(el, originalText){
@@ -809,10 +934,14 @@ document.getElementById("tryVoiceBtn").addEventListener("click", () => {
     if(ok) diagLog("この声で 成功しました。この声のまま お使いください。", "ok");
   }, 0);
 });
-document.getElementById("speakPhotoBtn").addEventListener("click", () => speakFrom(photoOut, ocrText.value));
+document.getElementById("speakPhotoBtn").addEventListener("click", () => speakContainer(photoOut));
 document.getElementById("stopPhotoBtn").addEventListener("click", stopSpeak);
-document.getElementById("speakTextBtn").addEventListener("click", () => speakFrom(textOut, src.value));
+document.getElementById("restartPhotoBtn").addEventListener("click", () => speakContainer(photoOut, 0));
+document.getElementById("speakTextBtn").addEventListener("click", () => speakContainer(textOut));
 document.getElementById("stopTextBtn").addEventListener("click", stopSpeak);
+document.getElementById("restartTextBtn").addEventListener("click", () => speakContainer(textOut, 0));
+enableClickToStart(photoOut);
+enableClickToStart(textOut);
 
 /* ===== アプリ内カメラ ===== */
 const camWrap = document.getElementById("camWrap");
@@ -947,7 +1076,7 @@ ocrBtn.addEventListener("click", async () => {
     }
     ocrText.value = text;
     ocrEditWrap.style.display = "block";
-    photoOut.innerHTML = await convertAsync(text);
+    await renderSentences(photoOut, text);
     previewOnly.style.display = "none";
     compareWrap.style.display = "block";
     diagLog("使用したOCR: " + engine, engine.indexOf("クラウド") === 0 ? "ok" : "err");
@@ -989,7 +1118,7 @@ document.getElementById("testBtn").addEventListener("click", async () => {
 });
 
 document.getElementById("ocrConvBtn").addEventListener("click", async () => {
-  photoOut.innerHTML = await convertAsync(ocrText.value);
+  await renderSentences(photoOut, ocrText.value);
 });
 
 /* 文字を直したら、下の表示（ルビ付きの文）に自動で反映する */
@@ -998,7 +1127,7 @@ ocrText.addEventListener("input", () => {
   if(reconvTimer) clearTimeout(reconvTimer);
   reconvTimer = setTimeout(async () => {
     if(compareWrap.style.display !== "none"){
-      photoOut.innerHTML = await convertAsync(ocrText.value);
+      await renderSentences(photoOut, ocrText.value);
     }
   }, 500);
 });
@@ -1016,7 +1145,7 @@ document.getElementById("clearPhoto").addEventListener("click", () => {
 let recognizedText = "";
 const voiceOut = document.getElementById("voiceOut");
 async function reconvertVoice(){ voiceOut.innerHTML = await convertAsync(recognizedText); }
-async function reconvertAll(){ reconvertVoice(); if(src.value) textOut.innerHTML = await convertAsync(src.value); }
+async function reconvertAll(){ reconvertVoice(); if(src.value) await renderSentences(textOut, src.value); }
 
 const micBtn = document.getElementById("micBtn");
 const micStatus = document.getElementById("micStatus");
