@@ -107,7 +107,12 @@
       <span class="status" id="ocrStatus"></span>
     </div>
     <div class="row">
-      <label style="font-size:14px; font-weight:700;">文字の向き</label>
+      <label style="font-size:14px; font-weight:700;">ことば</label>
+      <span class="seg" id="langSeg">
+        <button data-lang="ja" class="on">日本語</button>
+        <button data-lang="en">英語 English</button>
+      </span>
+      <label style="font-size:14px; font-weight:700; margin-left:10px;">文字の向き</label>
       <span class="seg" id="dirSeg">
         <button data-dir="h" class="on">横書き</button>
         <button data-dir="v">縦書き（国語など）</button>
@@ -208,6 +213,7 @@ function buildKeep(){
 buildKeep();
 
 let mode = "hira";
+var ocrLang = "ja";   // "ja" または "en"（音声・OCRの言語）
 let worker = null, workerReady = false, reqSeq = 0;
 const pending = {};
 
@@ -243,6 +249,8 @@ function tokenize(text){
 }
 
 async function convertAsync(text){
+  // 英文はふりがな変換の対象外。そのまま表示する
+  if(looksEnglish(text)) return escapeHtml(text).replace(/\n/g, "<br>");
   const tokens = await tokenize(text);
   if(!tokens) return escapeHtml(text).replace(/\n/g, "<br>");
   return tokensToHtml(tokens);
@@ -357,6 +365,24 @@ layoutSeg.addEventListener("click", e => {
   compareWrap.classList.toggle("side", b.dataset.lay === "side");
 });
 
+const langSeg = document.getElementById("langSeg");
+langSeg.addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  [...langSeg.children].forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  ocrLang = b.dataset.lang;
+  fillVoiceSelect();
+  jaVoice = pickJaVoice();
+});
+
+/* 文が英語かどうかを判定する（自動判定用） */
+function looksEnglish(t){
+  if(!t) return false;
+  const jp = (t.match(/[ぁ-んァ-ヶ㐀-鿿]/g) || []).length;
+  const en = (t.match(/[A-Za-z]/g) || []).length;
+  return en > 0 && jp === 0;
+}
+
 let ocrDir = "h";
 const dirSeg = document.getElementById("dirSeg");
 dirSeg.addEventListener("click", e => {
@@ -459,7 +485,7 @@ async function cloudOcr(file){
     res = await fetch(PROXY_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ image: b64, mimeType: file.type, secret: PROXY_SECRET })
+      body: JSON.stringify({ image: b64, mimeType: file.type, secret: PROXY_SECRET, lang: ocrLang })
     });
   }catch(e){
     diagLog("通信できませんでした（CORSまたはネットワーク遮断の可能性）: " + e.message, "err");
@@ -536,10 +562,14 @@ function pickJaVoice(){
   if(!vs.length) return null;
   voicesReady = true;
   // 日本語音声を優先的に選ぶ
-  const ja = vs.filter(x => /^ja(-|_|$)/i.test(x.lang || "") || /japanese|日本語/i.test(x.name || ""));
-  if(!ja.length) return null;
+  const want = (typeof ocrLang !== "undefined" && ocrLang === "en") ? "en" : "ja";
+  let list = vs.filter(x => new RegExp("^" + want + "(-|_|$)", "i").test(x.lang || ""));
+  if(!list.length && want === "ja"){
+    list = vs.filter(x => /japanese|日本語/i.test(x.name || ""));
+  }
+  if(!list.length) return null;
   // network（サーバー側）音声の方が自然なので優先する
-  return ja.find(x => /network/i.test(x.name || "")) || ja[0];
+  return list.find(x => /network/i.test(x.name || "")) || list[0];
 }
 
 /* 日本語音声の一覧を選択欄に入れる */
@@ -547,7 +577,8 @@ function fillVoiceSelect(){
   const sel = document.getElementById("voiceSel");
   if(!sel || !window.speechSynthesis) return;
   const vs = window.speechSynthesis.getVoices() || [];
-  const ja = vs.filter(v => /^ja(-|_|$)/i.test(v.lang || "") || /japanese|日本語/i.test(v.name || ""));
+  const want = (typeof ocrLang !== "undefined" && ocrLang === "en") ? "en" : "ja";
+  const ja = vs.filter(v => new RegExp("^" + want + "(-|_|$)", "i").test(v.lang || ""));
   const cur = sel.value;
   sel.innerHTML = '<option value="">（自動）</option>';
   // network（サーバー側）音声の方が自然なので先に並べる
@@ -614,9 +645,16 @@ function speakOne(textPart, onDone, attempt){
   attempt = attempt || 0;
   const u = new SpeechSynthesisUtterance(textPart);
   // 1回目は選ばれた日本語音声を指定、失敗したら2回目は lang だけで再挑戦
-  const v = selectedVoice();
+  const en = looksEnglish(textPart);
+  let v = selectedVoice();
+  // 英文なのに日本語の声が選ばれている場合は、英語の声に切り替える
+  if(en && v && !/^en/i.test(v.lang || "")){
+    const vs = window.speechSynthesis.getVoices() || [];
+    const enList = vs.filter(x => /^en(-|_|$)/i.test(x.lang || ""));
+    v = enList.find(x => /network/i.test(x.name || "")) || enList[0] || v;
+  }
   if(attempt === 0 && v){ u.voice = v; }
-  u.lang = "ja-JP";
+  u.lang = en ? ((v && /^en/i.test(v.lang || "")) ? v.lang : "en-US") : "ja-JP";
   u.rate = speakRate;
   u.pitch = 1;
   u.volume = 1;
@@ -892,7 +930,7 @@ ocrBtn.addEventListener("click", async () => {
         diagLog("内蔵OCR（Tesseract）に切り替えます。精度は下がります。", "err");
         ocrStatus.textContent = "クラウドOCR失敗。内蔵OCRで再試行中…";
         const canvas = await preprocess(photoFile);
-        text = await runOcr(canvas, ocrDir === "v" ? "jpn_vert" : "jpn", logger);
+        text = await runOcr(canvas, ocrLang === "en" ? "eng" : (ocrDir === "v" ? "jpn_vert" : "jpn"), logger);
         engine = "内蔵OCR（Tesseract・低精度）";
       }
     } else {
@@ -901,7 +939,12 @@ ocrBtn.addEventListener("click", async () => {
       text = await runOcr(canvas, ocrDir === "v" ? "jpn_vert" : "jpn", logger);
       engine = "内蔵OCR（Tesseract・低精度）";
     }
-    text = text.replace(/[ \t　]+/g, "").replace(/\n{2,}/g, "\n").trim();
+    // 英語は語間の空白が必要なので消さない
+    if(ocrLang === "en" || looksEnglish(text)){
+      text = text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
+    } else {
+      text = text.replace(/[ \t　]+/g, "").replace(/\n{2,}/g, "\n").trim();
+    }
     ocrText.value = text;
     ocrEditWrap.style.display = "block";
     photoOut.innerHTML = await convertAsync(text);
