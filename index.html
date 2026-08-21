@@ -158,6 +158,11 @@
         <button class="btn gray" id="voiceCheckBtn">音声チェック</button>
         <span class="status" id="speakStatus"></span>
       </div>
+      <div class="row">
+        <label style="font-size:14px; font-weight:700;">声をえらぶ</label>
+        <select id="voiceSel" style="max-width:340px;"><option value="">（自動）</option></select>
+        <button class="btn gray" id="tryVoiceBtn">この声でテスト</button>
+      </div>
     </div>
   </div>
 
@@ -529,19 +534,52 @@ function pickJaVoice(){
   return v || null;
 }
 
+/* 日本語音声の一覧を選択欄に入れる */
+function fillVoiceSelect(){
+  const sel = document.getElementById("voiceSel");
+  if(!sel || !window.speechSynthesis) return;
+  const vs = window.speechSynthesis.getVoices() || [];
+  const ja = vs.filter(v => /^ja(-|_|$)/i.test(v.lang || "") || /japanese|日本語/i.test(v.name || ""));
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">（自動）</option>';
+  ja.forEach(v => {
+    const o = document.createElement("option");
+    o.value = v.name;
+    o.textContent = v.name.replace("Android Google の音声サービス ", "") + "（" + v.lang + "）";
+    sel.appendChild(o);
+  });
+  if(cur) sel.value = cur;
+}
+
 function initVoices(){
   if(!window.speechSynthesis) return;
   jaVoice = pickJaVoice();
+  fillVoiceSelect();
   if(window.speechSynthesis.onvoiceschanged !== undefined){
-    window.speechSynthesis.onvoiceschanged = () => { jaVoice = pickJaVoice(); };
+    window.speechSynthesis.onvoiceschanged = () => { jaVoice = pickJaVoice(); fillVoiceSelect(); };
   }
 }
 initVoices();
 
+/* 選択欄で選ばれた声を返す（未選択なら自動） */
+function selectedVoice(){
+  const sel = document.getElementById("voiceSel");
+  if(sel && sel.value){
+    const vs = window.speechSynthesis.getVoices() || [];
+    const v = vs.find(x => x.name === sel.value);
+    if(v) return v;
+  }
+  return jaVoice;
+}
+
 function listVoices(){
   const vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
   if(!vs.length) return "（音声リストが空です）";
-  return vs.map(v => v.name + "[" + v.lang + "]").join(" / ");
+  const ja = vs.filter(v => /^ja(-|_|$)/i.test(v.lang || ""));
+  const android = ja.filter(v => /android/i.test(v.name || "")).length;
+  return "全" + vs.length + "件中、日本語 " + ja.length + "件"
+    + (android === ja.length && ja.length > 0 ? "（すべてAndroid由来）" : "")
+    + "：" + ja.map(v => v.name.replace("Android Google の音声サービス ", "")).join(" / ");
 }
 
 let userStopped = false;
@@ -560,8 +598,9 @@ function stopSpeak(){
 function speakOne(textPart, onDone, attempt){
   attempt = attempt || 0;
   const u = new SpeechSynthesisUtterance(textPart);
-  // 1回目は日本語音声を指定、失敗したら2回目は lang だけで再挑戦
-  if(attempt === 0 && jaVoice){ u.voice = jaVoice; }
+  // 1回目は選ばれた日本語音声を指定、失敗したら2回目は lang だけで再挑戦
+  const v = selectedVoice();
+  if(attempt === 0 && v){ u.voice = v; }
   u.lang = "ja-JP";
   u.rate = speakRate;
   u.pitch = 1;
@@ -683,6 +722,22 @@ function checkVoices(){
 }
 
 document.getElementById("voiceCheckBtn").addEventListener("click", checkVoices);
+document.getElementById("tryVoiceBtn").addEventListener("click", () => {
+  diagClear();
+  const v = selectedVoice();
+  diagLog("テストする声: " + (v ? v.name + "（" + v.lang + "）" : "（自動）"));
+  userStopped = false;
+  if(window.speechSynthesis.speaking || window.speechSynthesis.pending){ window.speechSynthesis.cancel(); }
+  try{ window.speechSynthesis.resume(); }catch(e){}
+  if(watchdog){ clearTimeout(watchdog); }
+  watchdog = setTimeout(() => {
+    diagLog("この声では 音が出ませんでした。ほかの声を選んで もう一度お試しください。", "err");
+    diagLog("すべて出ない場合：設定 → ユーザー補助 → 音声とテキスト読み上げ → 音声 で「日本語」を追加してください。", "err");
+  }, 2500);
+  speakOne("こんにちは。よみあげの テストです。", (ok) => {
+    if(ok) diagLog("この声で 成功しました。この声のまま お使いください。", "ok");
+  }, 0);
+});
 document.getElementById("speakPhotoBtn").addEventListener("click", () => speakFrom(photoOut));
 document.getElementById("stopPhotoBtn").addEventListener("click", stopSpeak);
 document.getElementById("speakTextBtn").addEventListener("click", () => speakFrom(textOut));
