@@ -991,6 +991,17 @@ document.getElementById("testBtn").addEventListener("click", async () => {
 document.getElementById("ocrConvBtn").addEventListener("click", async () => {
   photoOut.innerHTML = await convertAsync(ocrText.value);
 });
+
+/* 文字を直したら、下の表示（ルビ付きの文）に自動で反映する */
+let reconvTimer = null;
+ocrText.addEventListener("input", () => {
+  if(reconvTimer) clearTimeout(reconvTimer);
+  reconvTimer = setTimeout(async () => {
+    if(compareWrap.style.display !== "none"){
+      photoOut.innerHTML = await convertAsync(ocrText.value);
+    }
+  }, 500);
+});
 document.getElementById("clearPhoto").addEventListener("click", () => {
   photoFile = null; photoInput.value = ""; ocrText.value = "";
   previewOnly.style.display = "none"; compareWrap.style.display = "none";
