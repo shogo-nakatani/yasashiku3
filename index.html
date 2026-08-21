@@ -545,9 +545,11 @@ function listVoices(){
 }
 
 let userStopped = false;
+let watchdog = null;
 
 function stopSpeak(){
   userStopped = true;
+  if(watchdog){ clearTimeout(watchdog); watchdog = null; }
   if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
   if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
   utterKeep.length = 0;
@@ -564,13 +566,17 @@ function speakOne(textPart, onDone, attempt){
   u.rate = speakRate;
   u.pitch = 1;
   u.volume = 1;
+  u.onstart = () => {
+    if(speakStatus) speakStatus.textContent = "よみあげ中…";
+    if(watchdog){ clearTimeout(watchdog); watchdog = null; }
+  };
   u.onend = () => onDone(true);
   u.onerror = (ev) => {
     const code = (ev && ev.error) ? ev.error : "不明";
     if(userStopped){ return; }
     if(attempt < 2 && (code === "canceled" || code === "interrupted" || code === "synthesis-failed")){
-      // 少し待ってから、指定を変えて再挑戦
-      setTimeout(() => speakOne(textPart, onDone, attempt + 1), 250);
+      // 指定を変えて、すぐに再挑戦（待ち時間を入れると無効化されるため）
+      speakOne(textPart, onDone, attempt + 1);
       return;
     }
     if(speakStatus) speakStatus.textContent = "よみあげ失敗（" + code + "）";
@@ -596,12 +602,8 @@ function speakFrom(el){
   }
 
   // 音声リストがまだなら少し待って再挑戦
+  // 音声リストが未取得でも、lang指定だけで発話できるので中断しない
   if(!jaVoice){ jaVoice = pickJaVoice(); }
-  if(!jaVoice && !voicesReady){
-    if(speakStatus) speakStatus.textContent = "音声を じゅんび中… もう一度おしてください";
-    setTimeout(() => { jaVoice = pickJaVoice(); }, 300);
-    return;
-  }
 
   if(keepAlive){ clearInterval(keepAlive); keepAlive = null; }
   utterKeep.length = 0;
@@ -624,25 +626,32 @@ function speakFrom(el){
     speakOne(chunks[i++], speakNext, 0);
   };
 
-  const start = () => {
-    userStopped = false;
-    if(speakStatus) speakStatus.textContent = "よみあげ中…";
-    keepAlive = setInterval(() => {
-      if(window.speechSynthesis.speaking && !window.speechSynthesis.paused){
-        window.speechSynthesis.resume();
-      }
-    }, 5000);
-    speakNext(true);
-  };
-
-  // すでに話している時だけ止め、十分に間をあけてから開始する
+  // ChromeOSでは、ボタン操作と同じ流れの中で speak() を呼ぶ必要がある。
+  // 待ち時間（setTimeout）を挟むと無音のまま無視されるため、ここは同期的に実行する。
   if(window.speechSynthesis.speaking || window.speechSynthesis.pending){
-    userStopped = true;
     window.speechSynthesis.cancel();
-    setTimeout(start, 300);
-  } else {
-    start();
   }
+  userStopped = false;
+  try{ window.speechSynthesis.resume(); }catch(e){}
+
+  if(speakStatus) speakStatus.textContent = "よみあげ中…";
+  keepAlive = setInterval(() => {
+    if(window.speechSynthesis.speaking && !window.speechSynthesis.paused){
+      window.speechSynthesis.resume();
+    }
+  }, 5000);
+
+  // 一定時間たっても始まらない場合に原因を知らせる
+  if(watchdog){ clearTimeout(watchdog); }
+  watchdog = setTimeout(() => {
+    if(!window.speechSynthesis.speaking){
+      if(speakStatus) speakStatus.textContent = "音が出ないときは 音量とミュートをご確認ください";
+      diagLog("発話が始まりませんでした。端末の音量・ミュート、または他のタブの音声をご確認ください。", "err");
+      diagLog("それでも出ない場合は、ページを再読み込み（Ctrl+Shift+R）してからもう一度お試しください。", "err");
+    }
+  }, 2500);
+
+  speakNext(true);
 }
 
 /* 音声チェック：使える音声を一覧表示し、テスト発話する */
@@ -654,15 +663,19 @@ function checkVoices(){
   if(jaVoice){
     diagLog("日本語の音声: " + jaVoice.name + "（" + jaVoice.lang + "）", "ok");
     userStopped = false;
-    const run = () => speakOne("こんにちは。よみあげの テストです。", (ok) => {
-      if(ok) diagLog("テスト成功。よみあげは つかえます。", "ok");
-    }, 0);
     if(window.speechSynthesis.speaking || window.speechSynthesis.pending){
       window.speechSynthesis.cancel();
-      setTimeout(run, 300);
-    } else {
-      run();
     }
+    try{ window.speechSynthesis.resume(); }catch(e){}
+    if(watchdog){ clearTimeout(watchdog); }
+    watchdog = setTimeout(() => {
+      if(!window.speechSynthesis.speaking){
+        diagLog("発話が始まりませんでした。音量・ミュートをご確認のうえ、ページを再読み込みしてお試しください。", "err");
+      }
+    }, 2500);
+    speakOne("こんにちは。よみあげの テストです。", (ok) => {
+      if(ok) diagLog("テスト成功。よみあげは つかえます。", "ok");
+    }, 0);
   } else {
     diagLog("日本語の音声が見つかりません。", "err");
     diagLog("→ Chromebookの 設定 → ユーザー補助 → 音声合成（テキスト読み上げ）→ 音声を追加 で日本語を入れてください。", "err");
