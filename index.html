@@ -163,6 +163,13 @@
         <select id="voiceSel" style="max-width:340px;"><option value="">（自動）</option></select>
         <button class="btn gray" id="tryVoiceBtn">この声でテスト</button>
       </div>
+      <div class="row">
+        <label style="font-size:14px; font-weight:700;">よみあげる文</label>
+        <span class="seg" id="srcSeg">
+          <button data-src="orig" class="on">元の文（自然な読み方）</button>
+          <button data-src="ruby">ふりがなのとおり</button>
+        </span>
+      </div>
     </div>
   </div>
 
@@ -529,9 +536,10 @@ function pickJaVoice(){
   if(!vs.length) return null;
   voicesReady = true;
   // 日本語音声を優先的に選ぶ
-  let v = vs.find(x => /^ja(-|_|$)/i.test(x.lang || ""));
-  if(!v) v = vs.find(x => /japanese|日本語/i.test(x.name || ""));
-  return v || null;
+  const ja = vs.filter(x => /^ja(-|_|$)/i.test(x.lang || "") || /japanese|日本語/i.test(x.name || ""));
+  if(!ja.length) return null;
+  // network（サーバー側）音声の方が自然なので優先する
+  return ja.find(x => /network/i.test(x.name || "")) || ja[0];
 }
 
 /* 日本語音声の一覧を選択欄に入れる */
@@ -542,10 +550,17 @@ function fillVoiceSelect(){
   const ja = vs.filter(v => /^ja(-|_|$)/i.test(v.lang || "") || /japanese|日本語/i.test(v.name || ""));
   const cur = sel.value;
   sel.innerHTML = '<option value="">（自動）</option>';
+  // network（サーバー側）音声の方が自然なので先に並べる
+  ja.sort((a, b) => {
+    const an = /network/i.test(a.name) ? 0 : 1;
+    const bn = /network/i.test(b.name) ? 0 : 1;
+    return an - bn;
+  });
   ja.forEach(v => {
     const o = document.createElement("option");
     o.value = v.name;
-    o.textContent = v.name.replace("Android Google の音声サービス ", "") + "（" + v.lang + "）";
+    const nat = /network/i.test(v.name) ? "★自然 " : "";
+    o.textContent = nat + v.name.replace("Android Google の音声サービス ", "") + "（" + v.lang + "）";
     sel.appendChild(o);
   });
   if(cur) sel.value = cur;
@@ -629,12 +644,30 @@ function speakOne(textPart, onDone, attempt){
   window.speechSynthesis.speak(u);
 }
 
-function speakFrom(el){
+let speakSrc = "orig";
+const srcSeg = document.getElementById("srcSeg");
+srcSeg.addEventListener("click", e => {
+  const b = e.target.closest("button"); if(!b) return;
+  [...srcSeg.children].forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  speakSrc = b.dataset.src;
+});
+
+/* 読み上げに渡す文を決める。
+   元の文（漢字かな交じり）の方が、区切りやアクセントが自然になる。 */
+function speechTextFor(el, originalText){
+  if(speakSrc === "orig" && originalText && originalText.trim()){
+    return originalText;
+  }
+  return readingTextFrom(el);
+}
+
+function speakFrom(el, originalText){
   if(!window.speechSynthesis){
     if(speakStatus) speakStatus.textContent = "このブラウザは よみあげに対応していません（Chrome推奨）";
     return;
   }
-  const text = readingTextFrom(el).replace(/\s+/g, " ").trim();
+  const text = speechTextFor(el, originalText).replace(/\s+/g, " ").trim();
   if(!text){
     if(speakStatus) speakStatus.textContent = "よみあげる文がありません。先に よみとって ください。";
     return;
@@ -738,9 +771,9 @@ document.getElementById("tryVoiceBtn").addEventListener("click", () => {
     if(ok) diagLog("この声で 成功しました。この声のまま お使いください。", "ok");
   }, 0);
 });
-document.getElementById("speakPhotoBtn").addEventListener("click", () => speakFrom(photoOut));
+document.getElementById("speakPhotoBtn").addEventListener("click", () => speakFrom(photoOut, ocrText.value));
 document.getElementById("stopPhotoBtn").addEventListener("click", stopSpeak);
-document.getElementById("speakTextBtn").addEventListener("click", () => speakFrom(textOut));
+document.getElementById("speakTextBtn").addEventListener("click", () => speakFrom(textOut, src.value));
 document.getElementById("stopTextBtn").addEventListener("click", stopSpeak);
 
 /* ===== アプリ内カメラ ===== */
