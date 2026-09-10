@@ -61,7 +61,7 @@
 <header>
   <h1>やさしく読める</h1>
   <p>自分の声で書いたり、教科書やワークの文を「習った漢字だけ」にして読みやすくします。
-     <span style="background:rgba(255,255,255,.25); padding:2px 10px; border-radius:10px; margin-left:8px;">版 2026-09-10 A</span></p>
+     <span style="background:rgba(255,255,255,.25); padding:2px 10px; border-radius:10px; margin-left:8px;">版 2026-09-10 B（マイク診断あり）</span></p>
 </header>
 
 <!-- 読み上げ中いつでも押せる、画面に固定した停止ボタン -->
@@ -101,8 +101,10 @@
       <button class="btn rec" id="micBtn" disabled>🎤 話す（スタート）</button>
       <button class="btn gray" id="clearVoice">けす</button>
       <button class="btn gray" id="copyVoice">コピー</button>
+      <button class="btn gray" id="micTestBtn">マイク接続テスト</button>
       <span class="status" id="micStatus"></span>
     </div>
+    <div id="micDiag" style="display:none; margin:10px 0; padding:10px 12px; background:#f8fafc; border:1px solid var(--line); border-radius:8px; font-family:Consolas,monospace; font-size:12px; line-height:1.6; max-height:260px; overflow:auto;"></div>
     <div class="hint">ボタンをおして自分で話すと、話したことばが文字になります。タイピングのかわりに、声でノートや答えを書けます。Chromeでインターネットにつながっているとうまくうごきます。</div>
     <div class="out big" id="voiceOut"></div>
   </div>
@@ -1210,11 +1212,123 @@ document.getElementById("copyVoice").onclick = () => {
   navigator.clipboard && navigator.clipboard.writeText(voiceOut.innerText || "");
 };
 
+/* ===== マイクの診断 ===== */
+function micLog(msg, kind){
+  const box = document.getElementById("micDiag");
+  const line = document.createElement("div");
+  line.textContent = "[" + new Date().toLocaleTimeString() + "] " + msg;
+  line.style.color = kind === "err" ? "#dc2626" : (kind === "ok" ? "#16a34a" : "#334155");
+  box.appendChild(line);
+  box.style.display = "block";
+  box.scrollTop = box.scrollHeight;
+}
+function micDiagClear(){
+  const box = document.getElementById("micDiag");
+  box.innerHTML = ""; box.style.display = "none";
+}
+
+/* マイクのエラー内容を、原因と対処に言いかえる */
+function explainMicError(code){
+  const m = {
+    "not-allowed": ["マイクの使用が許可されていません。", "生徒用アカウントでは管理者がマイクを禁止している場合があります。アドレスバーのマイクアイコンから「許可」を選ぶか、ICT担当に生徒用アカウントのマイク許可を依頼してください。"],
+    "service-not-allowed": ["音声認識サービスの利用が許可されていません。", "管理コンソールの設定で、生徒用アカウントに音声入力が許可されていない可能性があります。ICT担当にご確認ください。"],
+    "permission-denied": ["マイクの使用が拒否されました。", "アドレスバーのマイクアイコンから「許可」に変更してください。"],
+    "audio-capture": ["マイクが見つかりません。", "端末にマイクがあるか、他のアプリが使用中でないかご確認ください。"],
+    "network": ["インターネットに接続できていません。", "音声認識はネット接続が必要です。接続状態をご確認ください。"],
+    "no-speech": ["声が聞こえませんでした。", "もう少し大きな声で、マイクの近くで話してください。"],
+    "aborted": ["中断されました。", "もう一度お試しください。"],
+    "language-not-supported": ["この言語に対応していません。", "端末の言語設定をご確認ください。"]
+  };
+  return m[code] || ["原因不明のエラーです（" + code + "）。", "ページを再読み込みしてお試しください。"];
+}
+
+/* マイク接続テスト：どこで止まっているかを順に調べる */
+async function micTest(){
+  micDiagClear();
+  micLog("マイク接続テストを開始します。");
+
+  if(!SR){
+    micLog("このブラウザは音声認識に対応していません（Chrome推奨）。", "err");
+    return;
+  }
+  micLog("音声認識の機能: あり ✓", "ok");
+
+  const secure = window.isSecureContext;
+  micLog("安全な接続(HTTPS): " + (secure ? "はい ✓" : "いいえ"), secure ? "ok" : "err");
+  if(!secure){
+    micLog("→ https:// で始まるURLで開いてください。", "err");
+    return;
+  }
+
+  const inFrame = (window.self !== window.top);
+  micLog("保護枠(iframe)の中: " + (inFrame ? "はい" : "いいえ"), inFrame ? "err" : "ok");
+  if(inFrame){
+    micLog("→ Googleの保護枠の中ではマイクが遮断されます。Chromebook本体の音声入力をお使いください。", "err");
+  }
+
+  try{
+    if(navigator.permissions && navigator.permissions.query){
+      const st = await navigator.permissions.query({ name: "microphone" });
+      micLog("マイクの許可状態: " + st.state, st.state === "granted" ? "ok" : (st.state === "denied" ? "err" : ""));
+      if(st.state === "denied"){
+        micLog("→ 拒否されています。アドレスバーのマイクアイコンから「許可」に変更するか、管理者に生徒用アカウントのマイク許可を依頼してください。", "err");
+      }
+    } else {
+      micLog("許可状態を調べる機能がありません（このブラウザでは確認不可）。");
+    }
+  }catch(e){
+    micLog("許可状態の確認に失敗: " + e.message);
+  }
+
+  if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+    try{
+      const st = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micLog("マイクの取得: 成功 ✓（音を拾えています）", "ok");
+      st.getTracks().forEach(t => t.stop());
+    }catch(e){
+      const info = explainMicError(e.name === "NotAllowedError" ? "not-allowed" :
+                                  e.name === "NotFoundError" ? "audio-capture" : e.name);
+      micLog("マイクの取得: 失敗（" + e.name + "）", "err");
+      micLog("→ " + info[0] + " " + info[1], "err");
+    }
+  } else {
+    micLog("マイク取得の機能がありません。", "err");
+  }
+
+  micLog("音声認識を3秒間ためします。何か話してください…");
+  try{
+    const t = new SR();
+    t.lang = "ja-JP"; t.interimResults = true; t.continuous = false;
+    let heard = false;
+    t.onresult = ev => {
+      heard = true;
+      micLog("聞き取れました: 「" + ev.results[0][0].transcript + "」", "ok");
+    };
+    t.onerror = ev => {
+      const info = explainMicError(ev.error);
+      micLog("音声認識エラー: " + ev.error, "err");
+      micLog("→ " + info[0], "err");
+      micLog("→ 対処: " + info[1], "err");
+    };
+    t.onend = () => {
+      if(heard){ micLog("テスト成功。マイク機能は つかえます。", "ok"); }
+      else { micLog("言葉として認識できませんでした。もう一度お試しください。"); }
+    };
+    t.start();
+    setTimeout(() => { try{ t.stop(); }catch(e){} }, 3000);
+  }catch(e){
+    micLog("音声認識を開始できませんでした: " + e.message, "err");
+  }
+}
+
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+document.getElementById("micTestBtn").addEventListener("click", micTest);
+
 let recog = null, listening = false;
 if(!SR){
   micBtn.disabled = true;
   micStatus.textContent = "このブラウザは音声認識に対応していません（Chrome推奨）";
+  micLog("この環境では音声認識が使えません。「マイク接続テスト」で詳しく調べられます。", "err");
 } else {
   recog = new SR();
   recog.lang = "ja-JP";
@@ -1231,7 +1345,19 @@ if(!SR){
     voiceOut.innerHTML = converted +
       (interim ? '<span class="live">' + escapeHtml(interim) + '</span>' : "");
   };
-  recog.onerror = ev => { micStatus.textContent = "エラー: " + ev.error; };
+  recog.onerror = ev => {
+    const info = explainMicError(ev.error);
+    micStatus.textContent = info[0];
+    micLog("マイクのエラー: " + ev.error, "err");
+    micLog("→ " + info[0], "err");
+    micLog("→ 対処: " + info[1], "err");
+    if(["not-allowed","service-not-allowed","permission-denied","audio-capture"].includes(ev.error)){
+      listening = false;
+      micBtn.textContent = "🎤 話す（スタート）";
+      micBtn.classList.add("rec");
+      micLog("→ 「マイク接続テスト」を押すと、原因をくわしく調べられます。", "err");
+    }
+  };
   recog.onend = () => { if(listening){ try{ recog.start(); }catch(e){} } };
   micBtn.onclick = () => {
     if(listening){
